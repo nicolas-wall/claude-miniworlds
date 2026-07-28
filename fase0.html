@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Fase 0 — banco de pruebas de tracking</title>
+
+<style>
+  :root {
+    --ink:      #0B0E14;
+    --ink-2:    #151A24;
+    --signal:   #FFB020;   /* ámbar sodio: máxima legibilidad a pleno sol */
+    --ok:       #4ADE80;
+    --lost:     #FF5C5C;
+    --line:     #2A3341;
+    --text:     #E8EDF4;
+    --muted:    #7C8A9E;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--ink);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Roboto Mono", Menlo, monospace;
+    overscroll-behavior: none;
+  }
+
+  #stage { position: fixed; inset: 0; }
+  #stage video, #stage canvas { object-fit: cover; }
+
+  /* ---------- Telemetría ---------- */
+  #hud {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    left: 0; right: 0;
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .3s;
+  }
+  #hud.on { opacity: 1; }
+  #hud .cell { background: rgba(11,14,20,.82); padding: 8px 10px; }
+  #hud .k { color: var(--muted); text-transform: uppercase; font-size: 9px; display: block; margin-bottom: 3px; }
+  #hud .v { font-size: 15px; font-variant-numeric: tabular-nums; }
+
+  #state { color: var(--lost); }
+  #state.found { color: var(--ok); }
+
+  /* ---------- Pantallas ---------- */
+  .screen {
+    position: fixed; inset: 0;
+    background: var(--ink);
+    display: flex; flex-direction: column;
+    justify-content: center;
+    padding: 32px 26px calc(32px + env(safe-area-inset-bottom, 0px));
+    gap: 18px;
+    z-index: 10;
+  }
+  .screen[hidden] { display: none; }
+
+  .eyebrow {
+    color: var(--signal);
+    font-size: 10px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+  }
+  h1 { font-size: 26px; font-weight: 600; line-height: 1.15; letter-spacing: -.01em; }
+  p  { color: var(--muted); font-size: 14px; line-height: 1.6; }
+  code {
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    padding: 2px 6px;
+    color: var(--signal);
+    font-size: 13px;
+    word-break: break-all;
+  }
+
+  button {
+    font: inherit; font-size: 14px; font-weight: 600;
+    letter-spacing: .04em;
+    background: var(--signal);
+    color: var(--ink);
+    border: 0;
+    padding: 16px;
+    cursor: pointer;
+    width: 100%;
+  }
+  button:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
+  button:active { transform: translateY(1px); }
+
+  .checklist { list-style: none; display: grid; gap: 8px; }
+  .checklist li {
+    color: var(--muted); font-size: 13px; line-height: 1.5;
+    padding-left: 20px; position: relative;
+  }
+  .checklist li::before {
+    content: "—"; position: absolute; left: 0; color: var(--signal);
+  }
+
+  #report { border-top: 1px solid var(--line); padding-top: 16px; display: grid; gap: 6px; font-size: 13px; }
+  #report div { display: flex; justify-content: space-between; }
+  #report span:last-child { color: var(--signal); font-variant-numeric: tabular-nums; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<div id="hud">
+  <div class="cell"><span class="k">Estado</span><span class="v" id="state">—</span></div>
+  <div class="cell"><span class="k">FPS</span><span class="v" id="fps">—</span></div>
+  <div class="cell"><span class="k">Pérdidas</span><span class="v" id="drops">0</span></div>
+  <div class="cell"><span class="k">Enganche</span><span class="v" id="ttf">—</span></div>
+</div>
+
+<!-- Bloqueo: navegador embebido -->
+<section class="screen" id="scr-inapp" hidden>
+  <span class="eyebrow">Cámara no disponible</span>
+  <h1>Abrí esta página en el navegador del sistema</h1>
+  <p>Estás dentro de un navegador embebido (Instagram, Facebook o similar). En iOS no tiene permiso de cámara, así que el tracking no puede arrancar.</p>
+  <p>Tocá los tres puntos arriba a la derecha y elegí <strong style="color:var(--text)">Abrir en el navegador</strong>.</p>
+</section>
+
+<!-- Bloqueo: sin HTTPS -->
+<section class="screen" id="scr-tls" hidden>
+  <span class="eyebrow">Contexto inseguro</span>
+  <h1>La cámara requiere HTTPS</h1>
+  <p>Serví el archivo por TLS o desde <code>localhost</code>. Un servidor estático en <code>file://</code> o por IP en HTTP no habilita <code>getUserMedia</code>.</p>
+</section>
+
+<!-- Inicio -->
+<section class="screen" id="scr-start" hidden>
+  <span class="eyebrow">Fase 0 · banco de pruebas</span>
+  <h1>Un target.<br>Un cubo.<br>Escala relativa.</h1>
+  <p>El cubo mide <strong style="color:var(--text)">25% del ancho del target</strong> sea cual sea el tamaño de impresión. Si funciona en revista y en afiche sin tocar una línea, la escala relativa quedó verificada.</p>
+  <ul class="checklist">
+    <li>Probalo a pleno sol, no en el escritorio</li>
+    <li>Buscá el ángulo rasante donde se rompe</li>
+    <li>Alejate hasta perderlo y anotá la distancia</li>
+  </ul>
+  <button id="btn-start">Activar cámara</button>
+</section>
+
+<!-- Error -->
+<section class="screen" id="scr-error" hidden>
+  <span class="eyebrow">Falló el arranque</span>
+  <h1 id="err-title">Error</h1>
+  <p id="err-body"></p>
+  <button id="btn-retry">Reintentar</button>
+</section>
+
+<!-- Cierre de sesión de prueba -->
+<section class="screen" id="scr-report" hidden>
+  <span class="eyebrow">Sesión cerrada</span>
+  <h1>Resultado de la prueba</h1>
+  <div id="report">
+    <div><span>Tiempo hasta enganche</span><span id="r-ttf">—</span></div>
+    <div><span>FPS mediana</span><span id="r-fps">—</span></div>
+    <div><span>Pérdidas de target</span><span id="r-drops">—</span></div>
+    <div><span>Tiempo con tracking</span><span id="r-hold">—</span></div>
+  </div>
+  <p>Piso aceptable en gama media: 25 FPS, enganche bajo 2 s, menos de 3 pérdidas por minuto sostenido.</p>
+  <button id="btn-again">Nueva prueba</button>
+</section>
+
+<script type="module">
+import * as THREE from 'three';
+import { MindARThree } from 'mindar-image-three';
+
+/* ------------------------------------------------------------------
+   CONFIG — lo único que se toca por ahora.
+   TARGET_ASPECT: ancho/alto de la imagen impresa. Solo afecta el marco
+   de referencia dibujado, no la escala del contenido.
+   ------------------------------------------------------------------ */
+const CONFIG = {
+  // Target de muestra de MindAR — reemplazar por el .mind propio antes de Fase 1.
+  MIND_URL:      'https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/assets/card-example/card.mind',
+  TARGET_INDEX:  0,
+  TARGET_ASPECT: 0.82,   // card example: ~394×480 px (portrait)
+  CUBE_SIZE:     0.25,   // fracción del ancho del target
+};
+
+const $ = (id) => document.getElementById(id);
+const screens = ['scr-inapp','scr-tls','scr-start','scr-error','scr-report'];
+const show = (id) => screens.forEach(s => $(s).hidden = (s !== id));
+
+/* ---------- Puertas de entrada ---------- */
+const ua = navigator.userAgent;
+const isInApp = /FBAN|FBAV|Instagram|Line\/|Twitter|MicroMessenger|TikTok/i.test(ua);
+const isSecure = window.isSecureContext;
+
+if (isInApp)        show('scr-inapp');
+else if (!isSecure) show('scr-tls');
+else                show('scr-start');
+
+/* ---------- Telemetría ---------- */
+const T = {
+  t0: 0, ttf: null, drops: 0,
+  holdMs: 0, lastFound: null,
+  frames: [], lastFrame: 0,
+  reset() { this.t0 = performance.now(); this.ttf = null; this.drops = 0;
+            this.holdMs = 0; this.lastFound = null; this.frames = []; this.lastFrame = 0; }
+};
+
+function setState(found) {
+  const el = $('state');
+  el.textContent = found ? 'TRACK' : 'BUSCA';
+  el.classList.toggle('found', found);
+}
+
+/* ---------- Escena ---------- */
+let mindarThree = null;
+
+async function start() {
+  T.reset();
+
+  mindarThree = new MindARThree({
+    container: $('stage'),
+    imageTargetSrc: CONFIG.MIND_URL,
+    uiScanning: 'no',
+    uiLoading: 'no',
+    uiError: 'no',
+  });
+
+  const { renderer, scene, camera } = mindarThree;
+  const anchor = mindarThree.addAnchor(CONFIG.TARGET_INDEX);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x333344, 2.2));
+  const key = new THREE.DirectionalLight(0xffffff, 1.4);
+  key.position.set(0.5, 1, 1);
+  scene.add(key);
+
+  // Marco de referencia: coincide con los bordes del target si TARGET_ASPECT
+  // es correcto. Si el marco "nada" sobre la imagen, la homografía es mala.
+  const h = 1 / CONFIG.TARGET_ASPECT;
+  const frame = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, h)),
+    new THREE.LineBasicMaterial({ color: 0xFFB020 })
+  );
+  anchor.group.add(frame);
+
+  const s = CONFIG.CUBE_SIZE;
+  const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(s, s, s),
+    new THREE.MeshStandardMaterial({ color: 0xFFB020, roughness: 0.35, metalness: 0.1 })
+  );
+  cube.position.z = s / 2;          // apoyado sobre el plano de la imagen
+  anchor.group.add(cube);
+
+  anchor.onTargetFound = () => {
+    if (T.ttf === null) {
+      T.ttf = performance.now() - T.t0;
+      $('ttf').textContent = (T.ttf / 1000).toFixed(2) + 's';
+    }
+    T.lastFound = performance.now();
+    setState(true);
+  };
+
+  anchor.onTargetLost = () => {
+    if (T.lastFound) { T.holdMs += performance.now() - T.lastFound; T.lastFound = null; }
+    T.drops++;
+    $('drops').textContent = T.drops;
+    setState(false);
+  };
+
+  try {
+    await mindarThree.start();
+  } catch (e) {
+    await stop();
+    reportError(e);
+    return;
+  }
+
+  show(null);
+  $('hud').classList.add('on');
+  setState(false);
+
+  renderer.setAnimationLoop(() => {
+    const now = performance.now();
+    if (T.lastFrame) {
+      const fps = 1000 / (now - T.lastFrame);
+      T.frames.push(fps);
+      if (T.frames.length % 15 === 0) $('fps').textContent = Math.round(fps);
+    }
+    T.lastFrame = now;
+
+    cube.rotation.y += 0.02;
+    cube.rotation.x += 0.008;
+    renderer.render(scene, camera);
+  });
+}
+
+async function stop() {
+  if (!mindarThree) return;
+  mindarThree.renderer.setAnimationLoop(null);
+  try { await mindarThree.stop(); } catch {}
+  $('stage').innerHTML = '';
+  $('hud').classList.remove('on');
+  mindarThree = null;
+}
+
+/* ---------- Errores concretos, no genéricos ---------- */
+function reportError(e) {
+  const map = {
+    NotAllowedError:  ['Permiso de cámara denegado',
+      'Habilitá la cámara para este sitio en los ajustes del navegador y recargá.'],
+    NotFoundError:    ['No se detectó cámara',
+      'El dispositivo no expone una cámara trasera utilizable.'],
+    NotReadableError: ['La cámara está ocupada',
+      'Otra app la está usando. Cerrala y reintentá.'],
+  };
+  const [t, b] = map[e?.name] || ['No se pudo cargar el target',
+    `Verificá que exista ${CONFIG.MIND_URL} y que se sirva con el MIME correcto. Detalle: ${e?.message || e}`];
+  $('err-title').textContent = t;
+  $('err-body').textContent = b;
+  show('scr-error');
+}
+
+/* ---------- Cierre de sesión ---------- */
+function finish() {
+  if (T.lastFound) { T.holdMs += performance.now() - T.lastFound; T.lastFound = null; }
+  const total = performance.now() - T.t0;
+  const f = T.frames.slice().sort((a, b) => a - b);
+  const med = f.length ? f[Math.floor(f.length / 2)] : 0;
+
+  $('r-ttf').textContent   = T.ttf === null ? 'nunca enganchó' : (T.ttf / 1000).toFixed(2) + 's';
+  $('r-fps').textContent   = med ? Math.round(med) : '—';
+  $('r-drops').textContent = T.drops;
+  $('r-hold').textContent  = total ? Math.round(100 * T.holdMs / total) + '%' : '—';
+
+  show('scr-report');
+}
+
+$('btn-start').onclick = start;
+$('btn-retry').onclick = start;
+$('btn-again').onclick = start;
+
+// Doble toque en el HUD cierra la sesión y muestra el informe.
+let taps = 0;
+$('hud').style.pointerEvents = 'auto';
+$('hud').onclick = () => {
+  if (++taps >= 2) { taps = 0; stop().then(finish); }
+  setTimeout(() => taps = 0, 400);
+};
+</script>
+</body>
+</html>
