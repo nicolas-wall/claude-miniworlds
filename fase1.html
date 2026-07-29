@@ -297,12 +297,6 @@ async function init() {
       ctx.beginPath(); ctx.arc(p.x*CS, p.y*CS, p.sz * 2, 0, Math.PI*2); ctx.fill();
     });
     ctx.globalAlpha = 1;
-    // bright glints on every 7th particle
-    P_FRONT.filter((_,i) => i%7===0).forEach(p => {
-      const a = Math.max(0, Math.sin(t*5+p.ph));
-      ctx.fillStyle = `rgba(255,255,255,${a*.85})`;
-      ctx.beginPath(); ctx.arc(p.x*CS, p.y*CS, p.sz*.35, 0, Math.PI*2); ctx.fill();
-    });
   }
 
   // Create a stencil-tested plane mesh
