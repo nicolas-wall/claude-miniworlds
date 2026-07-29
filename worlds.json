@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 3,
+  "bundleUrl": "https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.mind",
+  "worlds": [
+    {
+      "id": "portal-01",
+      "targetIndex": 0,
+      "title": "El primer portal",
+      "targetAspect": 0.82,
+      "scaleMode": "relative",
+      "status": "live",
+      "updatedAt": "2026-07-28T00:00:00Z"
+    }
+  ]
+}

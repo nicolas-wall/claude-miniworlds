@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiniWorlds — WebAR</title>
+<style>
+  :root { --ink: #0B0E14; --ink-2: #151A24; --signal: #FFB020; --text: #E8EDF4; --muted: #7C8A9E; --line: #2A3341; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--ink);
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", "Roboto Mono", Menlo, monospace;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 40px 24px;
+    gap: 32px;
+  }
+  .eyebrow { color: var(--signal); font-size: 10px; letter-spacing: .22em; text-transform: uppercase; }
+  h1 { font-size: 28px; font-weight: 600; line-height: 1.1; letter-spacing: -.01em; }
+  p { color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 320px; }
+  .links { display: grid; gap: 1px; }
+  a.card {
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    padding: 18px 20px;
+    text-decoration: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: border-color .15s;
+  }
+  a.card:hover { border-color: var(--signal); }
+  .card-title { color: var(--text); font-size: 14px; font-weight: 600; }
+  .card-desc  { color: var(--muted); font-size: 12px; }
+  .card-tag   { color: var(--signal); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; margin-top: 2px; }
+</style>
+</head>
+<body>
+  <div>
+    <span class="eyebrow">WebAR · Fase 0</span>
+    <h1 style="margin-top:8px">Mini<br>Worlds</h1>
+  </div>
+  <p>Imágenes impresas que abren pequeños mundos en realidad aumentada. Sin app, desde el navegador.</p>
+  <div class="links">
+    <a class="card" href="/fase1.html">
+      <span class="card-tag">Teléfono · activo</span>
+      <span class="card-title">Portal — Fase 1</span>
+      <span class="card-desc">Capas animadas con parallax. El mundo aparece dentro de la imagen.</span>
+    </a>
+    <a class="card" href="/target.html">
+      <span class="card-tag">Pantalla / imprimir</span>
+      <span class="card-title">Target de prueba</span>
+      <span class="card-desc">Mostrá esta página en otra pantalla o imprimila para tener algo que escanear.</span>
+    </a>
+    <a class="card" href="/fase0.html" style="opacity:.5">
+      <span class="card-tag">Archivado</span>
+      <span class="card-title">Banco de pruebas — Fase 0</span>
+      <span class="card-desc">Telemetría de tracking. Solo cubo, sin portal.</span>
+    </a>
+  </div>
+</body>
+</html>
