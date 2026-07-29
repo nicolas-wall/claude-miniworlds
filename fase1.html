@@ -36,15 +36,35 @@
   #state { color: var(--lost); }
   #state.found { color: var(--ok); }
 
-  .screen { position: fixed; inset: 0; background: var(--ink); display: flex; flex-direction: column; justify-content: center; padding: 32px 26px calc(32px + env(safe-area-inset-bottom, 0px)); gap: 18px; z-index: 10; }
+  .screen {
+    position: fixed; inset: 0; background: var(--ink);
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 32px 26px calc(32px + env(safe-area-inset-bottom, 0px));
+    gap: 18px; z-index: 10;
+  }
   .screen[hidden] { display: none; }
   .eyebrow { color: var(--signal); font-size: 10px; letter-spacing: .22em; text-transform: uppercase; }
   h1 { font-size: 26px; font-weight: 600; line-height: 1.15; }
   p { color: var(--muted); font-size: 14px; line-height: 1.6; }
-  code { background: var(--ink-2); border: 1px solid var(--line); padding: 2px 6px; color: var(--signal); font-size: 13px; word-break: break-all; }
-  button { font: inherit; font-size: 14px; font-weight: 600; background: var(--signal); color: var(--ink); border: 0; padding: 16px; cursor: pointer; width: 100%; }
-  button:disabled { opacity: .5; }
+  code { background: var(--ink-2); border: 1px solid var(--line); padding: 2px 6px; color: var(--signal); font-size: 13px; }
+  button {
+    font: inherit; font-size: 14px; font-weight: 600;
+    background: var(--signal); color: var(--ink);
+    border: 0; padding: 16px; cursor: pointer; width: 100%;
+  }
+  button:disabled { opacity: .45; cursor: default; }
   button:active:not(:disabled) { transform: translateY(1px); }
+  .hint { color: var(--muted); font-size: 12px; text-align: center; }
+
+  /* Loading spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--line); border-top-color: var(--signal);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    display: inline-block; vertical-align: middle; margin-right: 8px;
+  }
 </style>
 
 <script type="importmap">
@@ -78,16 +98,19 @@
   <p>Serví el archivo por TLS o desde <code>localhost</code>.</p>
 </section>
 
-<section class="screen" id="scr-start" hidden>
+<section class="screen" id="scr-start">
   <span class="eyebrow">Fase 1 · portal</span>
-  <h1 id="world-title">—</h1>
+  <h1 id="world-title">Cargando…</h1>
   <p>Apuntá la cámara al target. El mundo aparece dentro de la imagen. Moví el teléfono para ver las capas de profundidad.</p>
   <button id="btn-start">Activar cámara</button>
+  <p class="hint" id="hint-loading" hidden>
+    <span class="spinner"></span>Cargando detector de imágenes… puede tardar hasta 30 s
+  </p>
 </section>
 
 <section class="screen" id="scr-error" hidden>
-  <span class="eyebrow">Falló el arranque</span>
-  <h1 id="err-title">Error</h1>
+  <span class="eyebrow">Error</span>
+  <h1 id="err-title">Falló el arranque</h1>
   <p id="err-body"></p>
   <button id="btn-retry">Reintentar</button>
 </section>
@@ -102,107 +125,147 @@ const show = id => SCREENS.forEach(s => $(s).hidden = s !== id);
 
 /* ---------- Guards ---------- */
 const ua = navigator.userAgent;
-if (/FBAN|FBAV|Instagram|Line\/|Twitter|MicroMessenger|TikTok/i.test(ua)) { show('scr-inapp'); }
-else if (!window.isSecureContext) { show('scr-tls'); }
-else { init(); }
+if (/FBAN|FBAV|Instagram|Line\/|Twitter|MicroMessenger|TikTok/i.test(ua)) {
+  show('scr-inapp');
+} else if (!window.isSecureContext) {
+  show('scr-tls');
+} else {
+  init();
+}
 
 async function init() {
-  /* ---------- Config ---------- */
-  const DEFAULT_CONFIG = {
+  /* ---- Config (start screen shows immediately, title updates after fetch) ---- */
+  show('scr-start');
+
+  const DEFAULT = {
     bundleUrl: 'https://cdn.jsdelivr.net/gh/hiukim/mind-ar-js@1.2.5/examples/image-tracking/assets/card-example/card.mind',
     worlds: [{ id:'portal-01', targetIndex:0, title:'El primer portal', targetAspect:0.82, status:'live' }]
   };
-  let cfg;
-  try { cfg = await fetch('./worlds.json').then(r => { if(!r.ok) throw 0; return r.json(); }); }
-  catch { cfg = DEFAULT_CONFIG; }
+  let cfg = DEFAULT;
+  try {
+    const r = await fetch('./worlds.json');
+    if (r.ok) cfg = await r.json();
+  } catch { /* usa DEFAULT */ }
 
   const world = cfg.worlds.find(w => w.status === 'live') ?? cfg.worlds[0];
-  const MIND_URL = cfg.bundleUrl;
-  const TARGET_INDEX = world.targetIndex;
-  const ASPECT = world.targetAspect ?? 0.82;
-  const PW = 1;           // portal width  (MindAR units)
-  const PH = PW / ASPECT; // portal height
-
   $('world-title').textContent = world.title;
-  show('scr-start');
 
-  /* ---------- Canvas layer system ---------- */
-  const CS = 256; // canvas size (square, power of 2)
+  const MIND_URL   = cfg.bundleUrl;
+  const T_IDX      = world.targetIndex;
+  const ASPECT     = world.targetAspect ?? 0.82;
+  const PW = 1;
+  const PH = PW / ASPECT;
+  const SREF = 1; // stencil reference value
 
-  function makeCanvas() {
+  /* ---- Canvas layer factory ---- */
+  const CS = 256;
+
+  function mkCanvas() {
     const c = document.createElement('canvas');
     c.width = CS; c.height = CS;
     return { canvas: c, ctx: c.getContext('2d') };
   }
 
-  // Particle set used per layer
-  function makeParticles(n, opts) {
+  // Particle system
+  function mkParts(n, o) {
     return Array.from({ length: n }, () => ({
-      x: Math.random(),
-      y: Math.random(),
-      vx: (Math.random() - .5) * opts.vx,
-      vy: -opts.vy * (.5 + Math.random() * .5),
-      size: opts.minSize + Math.random() * (opts.maxSize - opts.minSize),
-      phase: Math.random() * Math.PI * 2,
-      r: opts.r, g: opts.g, b: opts.b,
+      x: Math.random(), y: Math.random(),
+      vx: (Math.random()-.5) * o.vx,
+      vy: -o.vy * (.5 + Math.random()*.5),
+      sz: o.s0 + Math.random() * (o.s1 - o.s0),
+      ph: Math.random() * Math.PI * 2,
+      r: o.r, g: o.g, b: o.b,
     }));
   }
 
-  function updateParticles(pts, dt) {
+  function moveParts(pts, dt) {
     pts.forEach(p => {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      if (p.y < -0.05) { p.y = 1.05; p.x = Math.random(); }
-      if (p.x < -0.05) p.x = 1.05;
-      if (p.x > 1.05)  p.x = -0.05;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.y < -.05) { p.y = 1.05; p.x = Math.random(); }
+      if (p.x < -.05) p.x = 1.05;
+      if (p.x > 1.05) p.x = -.05;
     });
   }
 
-  function drawParticles(ctx, pts, t, baseAlpha) {
-    const W = ctx.canvas.width;
+  function drawParts(ctx, pts, t, maxA) {
+    const W = CS;
     pts.forEach(p => {
-      const a = baseAlpha * (.6 + .4 * Math.sin(t * 2.1 + p.phase));
-      const s = p.size * (.85 + .15 * Math.sin(t * 1.4 + p.phase * 1.5));
-      const grd = ctx.createRadialGradient(p.x*W, p.y*W, 0, p.x*W, p.y*W, s);
-      grd.addColorStop(0, `rgba(${p.r},${p.g},${p.b},${a})`);
-      grd.addColorStop(1, `rgba(${p.r},${p.g},${p.b},0)`);
-      ctx.fillStyle = grd;
-      ctx.beginPath();
-      ctx.arc(p.x*W, p.y*W, s, 0, Math.PI*2);
-      ctx.fill();
+      const a = maxA * (.6 + .4 * Math.sin(t * 2.1 + p.ph));
+      const s = p.sz * (.85 + .15 * Math.sin(t * 1.4 + p.ph * 1.5));
+      const g = ctx.createRadialGradient(p.x*W, p.y*W, 0, p.x*W, p.y*W, s);
+      g.addColorStop(0, `rgba(${p.r},${p.g},${p.b},${a})`);
+      g.addColorStop(1, `rgba(${p.r},${p.g},${p.b},0)`);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x*W, p.y*W, s, 0, Math.PI*2); ctx.fill();
     });
   }
 
-  /*
-   * Layer definitions — back to front
-   * Each layer is a PlaneGeometry covering the portal, at a different Z depth.
-   * depthWrite:false so layers blend without depth fighting.
-   * stencil: EqualStencilFunc so they only render inside the portal mask.
-   *
-   * Layer 0 (Z=-1.6): Background — opaque dark sky + slow star field
-   * Layer 1 (Z=-1.0): Deep haze — large slow nebula blobs (purple/blue)
-   * Layer 2 (Z=-0.55): Mid particles — medium gold/amber particles drifting up
-   * Layer 3 (Z=-0.2):  Foreground — fast bright sparks, closest to opening
-   */
+  // Static star field for background
+  const STARS = Array.from({ length: 90 }, () => ({
+    x: Math.random(), y: Math.random(),
+    sz: .8 + Math.random() * 2.2, ph: Math.random() * Math.PI * 2,
+  }));
 
-  const STENCIL_REF = 1;
+  // Layer particle sets
+  const P_NEBULA  = mkParts(16, { vx:.004, vy:.003, s0:22, s1:46, r:110, g:70, b:220 });
+  const P_NEBULA2 = mkParts(10, { vx:.003, vy:.002, s0:26, s1:50, r:50, g:110, b:255 });
+  const P_MID    = mkParts(42, { vx:.006, vy:.013, s0:4,  s1:8,  r:255, g:176, b:32  });
+  const P_WHT    = mkParts(26, { vx:.004, vy:.010, s0:3,  s1:6,  r:210, g:210, b:255 });
+  const P_FRONT  = mkParts(58, { vx:.012, vy:.030, s0:2,  s1:5,  r:255, g:210, b:80  });
 
-  function makePlaneMat(canvas) {
+  const layerBg    = mkCanvas();
+  const layerDeep  = mkCanvas();
+  const layerMid   = mkCanvas();
+  const layerFront = mkCanvas();
+
+  function drawBg(t) {
+    const { ctx } = layerBg; const W = CS;
+    const gr = ctx.createLinearGradient(0,0,0,W);
+    gr.addColorStop(0, `hsl(${240+Math.sin(t*.1)*20},60%,8%)`);
+    gr.addColorStop(1, `hsl(${260+Math.sin(t*.07)*20},50%,4%)`);
+    ctx.fillStyle = gr; ctx.fillRect(0,0,W,W);
+    STARS.forEach(s => {
+      const a = .4 + .6*Math.sin(t*1.8+s.ph);
+      ctx.fillStyle = `rgba(210,215,255,${a})`;
+      ctx.beginPath(); ctx.arc(s.x*W, s.y*W, s.sz*(.8+.2*Math.sin(t*3+s.ph)), 0, Math.PI*2); ctx.fill();
+    });
+  }
+
+  function drawDeep(t, dt) {
+    const { ctx } = layerDeep;
+    ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fillRect(0,0,CS,CS);
+    moveParts(P_NEBULA, dt);  drawParts(ctx, P_NEBULA, t, .17);
+    moveParts(P_NEBULA2, dt); drawParts(ctx, P_NEBULA2, t, .13);
+  }
+
+  function drawMid(t, dt) {
+    const { ctx } = layerMid;
+    ctx.clearRect(0,0,CS,CS);
+    moveParts(P_MID, dt); drawParts(ctx, P_MID, t, .65);
+    moveParts(P_WHT, dt); drawParts(ctx, P_WHT, t, .42);
+  }
+
+  function drawFront(t, dt) {
+    const { ctx } = layerFront;
+    ctx.clearRect(0,0,CS,CS);
+    moveParts(P_FRONT, dt); drawParts(ctx, P_FRONT, t, .78);
+    // bright glints on every 7th particle
+    P_FRONT.filter((_,i) => i%7===0).forEach(p => {
+      const a = Math.max(0, Math.sin(t*5+p.ph));
+      ctx.fillStyle = `rgba(255,255,255,${a*.85})`;
+      ctx.beginPath(); ctx.arc(p.x*CS, p.y*CS, p.sz*.35, 0, Math.PI*2); ctx.fill();
+    });
+  }
+
+  // Create a stencil-tested plane mesh
+  function mkLayer(canvas, w, h, z, group) {
     const tex = new THREE.CanvasTexture(canvas);
     const mat = new THREE.MeshBasicMaterial({
-      map: tex,
-      transparent: true,
-      depthWrite: false,
+      map: tex, transparent: true, depthWrite: false,
       stencilWrite: false,
       stencilFunc: THREE.EqualStencilFunc,
-      stencilRef: STENCIL_REF,
+      stencilRef: SREF,
       side: THREE.DoubleSide,
     });
-    return { mat, tex };
-  }
-
-  function makePlane(w, h, z, canvas, group) {
-    const { mat, tex } = makePlaneMat(canvas);
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
     m.position.z = z;
     m.renderOrder = 1;
@@ -210,91 +273,12 @@ async function init() {
     return tex;
   }
 
-  // ---- Layer data ----
-  const layerBg    = makeCanvas(); // Layer 0: background sky
-  const layerDeep  = makeCanvas(); // Layer 1: nebula blobs
-  const layerMid   = makeCanvas(); // Layer 2: mid particles
-  const layerFront = makeCanvas(); // Layer 3: foreground sparks
-
-  // Stars for background (static positions, twinkle only)
-  const STARS = Array.from({ length: 80 }, () => ({
-    x: Math.random(), y: Math.random(),
-    size: 1 + Math.random() * 2.5,
-    phase: Math.random() * Math.PI * 2,
-  }));
-
-  // Nebula blobs (deep layer)
-  const NEBULA = makeParticles(14, { vx:.004, vy:.003, minSize:24, maxSize:48, r:120, g:80, b:220 });
-  const NEBULA2 = makeParticles(10, { vx:.003, vy:.002, minSize:28, maxSize:52, r:60, g:120, b:255 });
-
-  // Mid particles
-  const MID_GOLD = makeParticles(40, { vx:.006, vy:.012, minSize:4, maxSize:8, r:255, g:176, b:32 });
-  const MID_WHT  = makeParticles(25, { vx:.004, vy:.009, minSize:3, maxSize:6, r:220, g:220, b:255 });
-
-  // Foreground sparks
-  const FRONT = makeParticles(55, { vx:.012, vy:.028, minSize:2, maxSize:5, r:255, g:210, b:80 });
-
-  // ---- Draw functions ----
-  function drawBackground(t) {
-    const { ctx } = layerBg;
-    const W = CS;
-    // Sky gradient
-    const grd = ctx.createLinearGradient(0, 0, 0, W);
-    const hue = (t * 4) % 360;
-    grd.addColorStop(0, `hsl(${240 + Math.sin(t*.1)*20},60%,8%)`);
-    grd.addColorStop(1, `hsl(${260 + Math.sin(t*.07)*20},50%,4%)`);
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, W, W);
-    // Stars
-    STARS.forEach(s => {
-      const a = .4 + .6 * Math.sin(t * 1.8 + s.phase);
-      ctx.fillStyle = `rgba(220,220,255,${a})`;
-      ctx.beginPath();
-      ctx.arc(s.x*W, s.y*W, s.size * (.8 + .2*Math.sin(t*3+s.phase)), 0, Math.PI*2);
-      ctx.fill();
-    });
-  }
-
-  function drawDeep(t, dt) {
-    const { ctx } = layerDeep;
-    // Fade previous frame (trail effect)
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    ctx.fillRect(0, 0, CS, CS);
-    updateParticles(NEBULA, dt);
-    updateParticles(NEBULA2, dt);
-    drawParticles(ctx, NEBULA, t, 0.18);
-    drawParticles(ctx, NEBULA2, t, 0.14);
-  }
-
-  function drawMid(t, dt) {
-    const { ctx } = layerMid;
-    ctx.clearRect(0, 0, CS, CS);
-    updateParticles(MID_GOLD, dt);
-    updateParticles(MID_WHT, dt);
-    drawParticles(ctx, MID_GOLD, t, 0.65);
-    drawParticles(ctx, MID_WHT, t, 0.45);
-  }
-
-  function drawFront(t, dt) {
-    const { ctx } = layerFront;
-    ctx.clearRect(0, 0, CS, CS);
-    updateParticles(FRONT, dt);
-    drawParticles(ctx, FRONT, t, 0.8);
-    // Bright core glints
-    FRONT.filter((_, i) => i % 7 === 0).forEach(p => {
-      const a = Math.max(0, Math.sin(t * 5 + p.phase));
-      ctx.fillStyle = `rgba(255,255,255,${a * .9})`;
-      ctx.beginPath();
-      ctx.arc(p.x*CS, p.y*CS, p.size * .4, 0, Math.PI*2);
-      ctx.fill();
-    });
-  }
-
-  /* ---------- AR session ---------- */
+  /* ---- AR session state ---- */
   let mindarThree = null;
-  let worldGroup = null;
+  let worldGroup  = null;
+  let built       = false;  // scoped to init(), accessible by start() and stop()
   let texBg, texDeep, texMid, texFront;
-  let lastFrame = 0, fpsCount = 0, lastFps = 0;
+  let lastFrame = 0, fpsCount = 0, lastFpsMark = 0;
 
   function setState(found) {
     const el = $('state');
@@ -302,102 +286,14 @@ async function init() {
     el.classList.toggle('found', found);
   }
 
-  async function start() {
-    $('btn-start').disabled = true;
-    $('btn-start').textContent = 'Cargando…';
-
-    mindarThree = new MindARThree({
-      container: $('stage'),
-      imageTargetSrc: MIND_URL,
-      uiScanning: 'no', uiLoading: 'no', uiError: 'no',
-    });
-
-    const { renderer, scene, camera } = mindarThree;
-    const anchor = mindarThree.addAnchor(TARGET_INDEX);
-
-    /* ---- Portal stencil mask ---- */
-    const maskMat = new THREE.MeshBasicMaterial({
-      colorWrite: false,
-      depthWrite: false,
-      stencilWrite: true,
-      stencilFunc: THREE.AlwaysStencilFunc,
-      stencilRef: STENCIL_REF,
-      stencilZPass: THREE.ReplaceStencilOp,
-    });
-    const portalMask = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), maskMat);
-    portalMask.renderOrder = 0;
-    anchor.group.add(portalMask);
-
-    /* ---- Build layer planes (deferred on first targetFound) ---- */
-    function buildLayers() {
-      worldGroup = new THREE.Group();
-      worldGroup.visible = false;
-
-      texBg    = makePlane(PW*2.2, PH*2.2, -1.6, layerBg.canvas, worldGroup);
-      texDeep  = makePlane(PW*1.8, PH*1.8, -1.0, layerDeep.canvas, worldGroup);
-      texMid   = makePlane(PW*1.4, PH*1.4, -0.55, layerMid.canvas, worldGroup);
-      texFront = makePlane(PW*1.1, PH*1.1, -0.2, layerFront.canvas, worldGroup);
-
-      anchor.group.add(worldGroup);
-    }
-
-    let built = false;
-    anchor.onTargetFound = () => {
-      if (!built) { buildLayers(); built = true; }
-      worldGroup.visible = true;
-      setState(true);
-    };
-    anchor.onTargetLost = () => {
-      if (worldGroup) worldGroup.visible = false;
-      setState(false);
-    };
-
-    try { await mindarThree.start(); }
-    catch(e) {
-      await stop();
-      const MAP = {
-        NotAllowedError: ['Permiso de cámara denegado', 'Habilitá la cámara en ajustes y recargá.'],
-        NotFoundError:   ['No se detectó cámara', 'Sin cámara trasera utilizable.'],
-        NotReadableError:['La cámara está ocupada', 'Otra app la usa. Cerrala y reintentá.'],
-      };
-      const [t, b] = MAP[e?.name] || ['No se pudo iniciar', e?.message || String(e)];
-      $('err-title').textContent = t; $('err-body').textContent = b;
-      show('scr-error');
-      return;
-    }
-
-    show(null);
-    $('hud').classList.add('on');
-    setState(false);
-
-    renderer.setAnimationLoop(() => {
-      const now = performance.now();
-      const t   = now / 1000;
-      const dt  = Math.min((now - (lastFrame||now)) / 1000, .05);
-      lastFrame = now;
-
-      // FPS (rolling half-second)
-      fpsCount++;
-      if (now - lastFps >= 500) {
-        $('fps').textContent = Math.round(fpsCount * 1000 / (now - lastFps));
-        lastFps = now; fpsCount = 0;
-      }
-
-      // Update canvas layers
-      drawBackground(t);
-      drawDeep(t, dt);
-      drawMid(t, dt);
-      drawFront(t, dt);
-
-      if (texBg)    { texBg.needsUpdate    = true; }
-      if (texDeep)  { texDeep.needsUpdate  = true; }
-      if (texMid)   { texMid.needsUpdate   = true; }
-      if (texFront) { texFront.needsUpdate = true; }
-
-      renderer.clearDepth();
-      renderer.clearStencil();
-      renderer.render(scene, camera);
-    });
+  function buildLayers(anchorGroup) {
+    worldGroup = new THREE.Group();
+    worldGroup.visible = false;
+    texBg    = mkLayer(layerBg.canvas,    PW*2.2, PH*2.2, -1.6,  worldGroup);
+    texDeep  = mkLayer(layerDeep.canvas,  PW*1.8, PH*1.8, -1.0,  worldGroup);
+    texMid   = mkLayer(layerMid.canvas,   PW*1.4, PH*1.4, -0.55, worldGroup);
+    texFront = mkLayer(layerFront.canvas, PW*1.1, PH*1.1, -0.2,  worldGroup);
+    anchorGroup.add(worldGroup);
   }
 
   async function stop() {
@@ -410,11 +306,101 @@ async function init() {
     texBg = texDeep = texMid = texFront = null;
   }
 
+  async function start() {
+    const btn = $('btn-start');
+    btn.disabled = true;
+    btn.textContent = 'Cargando…';
+    $('hint-loading').hidden = false;
+
+    mindarThree = new MindARThree({
+      container: $('stage'),
+      imageTargetSrc: MIND_URL,
+      uiScanning: 'no', uiLoading: 'no', uiError: 'no',
+    });
+
+    const { renderer, scene, camera } = mindarThree;
+
+    // Ensure transparent background so camera video shows through
+    renderer.setClearColor(0x000000, 0);
+
+    const anchor = mindarThree.addAnchor(T_IDX);
+
+    /* ---- Portal stencil mask ---- */
+    const maskMat = new THREE.MeshBasicMaterial({
+      colorWrite: false,
+      depthWrite: false,
+      stencilWrite: true,
+      stencilFunc: THREE.AlwaysStencilFunc,
+      stencilRef: SREF,
+      stencilZPass: THREE.ReplaceStencilOp,
+    });
+    const portalMask = new THREE.Mesh(new THREE.PlaneGeometry(PW, PH), maskMat);
+    portalMask.renderOrder = 0;
+    anchor.group.add(portalMask);
+
+    /* ---- Target callbacks ---- */
+    anchor.onTargetFound = () => {
+      if (!built) { buildLayers(anchor.group); built = true; }
+      worldGroup.visible = true;
+      setState(true);
+    };
+    anchor.onTargetLost = () => {
+      if (worldGroup) worldGroup.visible = false;
+      setState(false);
+    };
+
+    /* ---- Start AR ---- */
+    try {
+      await mindarThree.start();
+    } catch(e) {
+      await stop();
+      const MAP = {
+        NotAllowedError:  ['Permiso de cámara denegado', 'Habilitá la cámara en ajustes del navegador y recargá.'],
+        NotFoundError:    ['No se detectó cámara',       'El dispositivo no tiene cámara trasera utilizable.'],
+        NotReadableError: ['La cámara está ocupada',     'Otra app la está usando. Cerrala y reintentá.'],
+      };
+      const [t, b] = MAP[e?.name] || ['No se pudo iniciar', e?.message || String(e)];
+      $('err-title').textContent = t; $('err-body').textContent = b;
+      show('scr-error'); return;
+    }
+
+    show(null);
+    $('hud').classList.add('on');
+    setState(false);
+
+    renderer.setAnimationLoop(() => {
+      const now = performance.now();
+      const t   = now / 1000;
+      const dt  = lastFrame ? Math.min((now - lastFrame) / 1000, .05) : 0;
+      lastFrame = now;
+
+      // FPS rolling counter
+      fpsCount++;
+      if (now - lastFpsMark >= 500) {
+        if (lastFpsMark) $('fps').textContent = Math.round(fpsCount * 1000 / (now - lastFpsMark));
+        lastFpsMark = now; fpsCount = 0;
+      }
+
+      // Draw canvas layers every frame
+      drawBg(t);
+      drawDeep(t, dt);
+      drawMid(t, dt);
+      drawFront(t, dt);
+
+      // Upload to GPU
+      if (texBg)    texBg.needsUpdate    = true;
+      if (texDeep)  texDeep.needsUpdate  = true;
+      if (texMid)   texMid.needsUpdate   = true;
+      if (texFront) texFront.needsUpdate = true;
+
+      // Clear stencil each frame so the mask re-writes it
+      renderer.clearStencil();
+      renderer.render(scene, camera);
+    });
+  }
+
   $('btn-start').addEventListener('click', start);
-  $('btn-retry').addEventListener('click', () => {
-    $('btn-retry').disabled = true;
-    start();
-  });
+  $('btn-retry').addEventListener('click', () => { show('scr-start'); start(); });
 }
 </script>
 </body>
