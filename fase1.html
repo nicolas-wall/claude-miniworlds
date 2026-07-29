@@ -65,6 +65,12 @@
     animation: spin .8s linear infinite;
     display: inline-block; vertical-align: middle; margin-right: 8px;
   }
+  .progress-bar {
+    width: 100%; height: 3px; background: var(--line); margin-top: 10px;
+  }
+  .progress-fill {
+    height: 100%; background: var(--signal); width: 0%; transition: width .2s;
+  }
 </style>
 
 <script type="importmap">
@@ -103,9 +109,10 @@
   <h1 id="world-title">Cargando…</h1>
   <p>Apuntá la cámara al target. El mundo aparece dentro de la imagen. Moví el teléfono para ver las capas de profundidad.</p>
   <button id="btn-start">Activar cámara</button>
-  <p class="hint" id="hint-loading" hidden>
-    <span class="spinner"></span>Cargando detector de imágenes… puede tardar hasta 30 s
-  </p>
+  <div id="hint-loading" hidden>
+    <p class="hint"><span class="spinner"></span><span id="hint-text">Iniciando…</span></p>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
 </section>
 
 <section class="screen" id="scr-error" hidden>
@@ -306,15 +313,53 @@ async function init() {
     texBg = texDeep = texMid = texFront = null;
   }
 
+  function setHint(text, pct) {
+    $('hint-text').textContent = text;
+    if (pct !== undefined) $('progress-fill').style.width = pct + '%';
+  }
+
+  async function fetchMind(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const len = Number(res.headers.get('Content-Length') || 0);
+    if (!res.body || !len) {
+      setHint('Descargando detector…', 50);
+      const buf = await res.arrayBuffer();
+      setHint('Detector descargado', 100);
+      return URL.createObjectURL(new Blob([buf]));
+    }
+    const reader = res.body.getReader();
+    let got = 0; const chunks = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); got += value.length;
+      setHint(`Descargando detector… ${Math.round(got/len*100)}%`, Math.round(got/len*100));
+    }
+    setHint('Detector descargado', 100);
+    return URL.createObjectURL(new Blob(chunks));
+  }
+
   async function start() {
     const btn = $('btn-start');
     btn.disabled = true;
     btn.textContent = 'Cargando…';
     $('hint-loading').hidden = false;
+    setHint('Descargando detector…', 0);
+
+    // Pre-download .mind file with progress; fall back to direct URL if fetch fails
+    let mindSrc = MIND_URL;
+    try {
+      mindSrc = await fetchMind(MIND_URL);
+    } catch (e) {
+      setHint('Iniciando…');
+    }
+
+    setHint('Iniciando cámara…', 100);
 
     mindarThree = new MindARThree({
       container: $('stage'),
-      imageTargetSrc: MIND_URL,
+      imageTargetSrc: mindSrc,
       uiScanning: 'no', uiLoading: 'no', uiError: 'no',
     });
 
@@ -353,9 +398,10 @@ async function init() {
     try {
       await mindarThree.start();
     } catch(e) {
+      if (mindSrc !== MIND_URL) URL.revokeObjectURL(mindSrc);
       await stop();
       const MAP = {
-        NotAllowedError:  ['Permiso de cámara denegado', 'Habilitá la cámara en ajustes del navegador y recargá.'],
+        NotAllowedError:  ['Permiso de cámara denegado', 'Habilitá la cámara en Ajustes > Safari > Cámara y recargá la página.'],
         NotFoundError:    ['No se detectó cámara',       'El dispositivo no tiene cámara trasera utilizable.'],
         NotReadableError: ['La cámara está ocupada',     'Otra app la está usando. Cerrala y reintentá.'],
       };
@@ -363,6 +409,9 @@ async function init() {
       $('err-title').textContent = t; $('err-body').textContent = b;
       show('scr-error'); return;
     }
+
+    // Release blob URL now that MindAR has loaded the .mind file
+    if (mindSrc !== MIND_URL) URL.revokeObjectURL(mindSrc);
 
     show(null);
     $('hud').classList.add('on');
