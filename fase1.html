@@ -240,9 +240,9 @@ async function init() {
 
   function drawDeep(t, dt) {
     const { ctx } = layerDeep;
-    ctx.fillStyle = 'rgba(0,0,0,0.15)'; ctx.fillRect(0,0,CS,CS);
-    moveParts(P_NEBULA, dt);  drawParts(ctx, P_NEBULA, t, .17);
-    moveParts(P_NEBULA2, dt); drawParts(ctx, P_NEBULA2, t, .13);
+    ctx.clearRect(0,0,CS,CS);
+    moveParts(P_NEBULA, dt);  drawParts(ctx, P_NEBULA, t, .28);
+    moveParts(P_NEBULA2, dt); drawParts(ctx, P_NEBULA2, t, .22);
   }
 
   function drawMid(t, dt) {
@@ -269,9 +269,14 @@ async function init() {
     const tex = new THREE.CanvasTexture(canvas);
     const mat = new THREE.MeshBasicMaterial({
       map: tex, transparent: true, depthWrite: false,
-      stencilWrite: false,
+      // stencilWrite must be true for Three.js to enable gl.STENCIL_TEST;
+      // all ops are KEEP so the stencil buffer is never modified by layers.
+      stencilWrite: true,
       stencilFunc: THREE.EqualStencilFunc,
       stencilRef: SREF,
+      stencilFail: THREE.KeepStencilOp,
+      stencilZFail: THREE.KeepStencilOp,
+      stencilZPass: THREE.KeepStencilOp,
       side: THREE.DoubleSide,
     });
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
